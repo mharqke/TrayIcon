@@ -43,7 +43,7 @@ HWND create_window(HINSTANCE hInstance, int nCmdShow)
         x + (w - 400) / 2,
         y + (h - 200) / 2,
         400,
-        200,
+        200, 
         NULL,
         NULL,
         hInstance,

@@ -1,9 +1,9 @@
-// Win32 Dialog.cpp : Defines the entry point for the application.
-//
+
 
 #include "stdafx.h"
 #include <assert.h>
 #include <cstdio>
+#include <cstdlib>
 
 #include "cfg.h"
 #include "env.h"
@@ -17,10 +17,17 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <psapi.h>
+#include <map>
 
 
-using namespace std;
-using namespace std::filesystem;
+#include <mutex>
+
+std::mutex m;
+
+HDC hdc;
+
+//using namespace std::filesystem;
 
 #define IDC_START 2001
 #define IDC_STOP  2002
@@ -32,43 +39,40 @@ using namespace std::filesystem;
 #define SWM_EXIT    (WM_APP + 3)//    close the window
 
 #define UWM_UPDATEINFO    (WM_USER + 4)
-#define UWM_CHILDQUIT    (WM_USER + 5)
-#define UWM_CHILDCREATE    (WM_USER + 6)
 
 CIniConfig config{};
 
 // Global Variables:
 HINSTANCE gInstance; // current instance
-HANDLE hJob;
 HANDLE hNewWaitHandle;
-bool createJob = false;
 NOTIFYICONDATA kData;
 
 HWND kDlg;
 
-const string temp_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/test/temp.txt";
-const string main_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/test/main.txt";
-const string log_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/test/log.txt";
-const string test_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/test/test.txt";
-const int FREQUENSY = 1000; // in milliseconds
+const std::string temp_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/temp.txt";
+const std::string main_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/main.txt";
+const std::string log_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/log.txt";
+const std::string focus_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/focus.txt";
+const int TIME_FREQUENSY = 1000; // in milliseconds
+const int FOCUSED_FREQUENSY = 500; //in milliseconds
+
 
 std::stop_source stopSource;
 
-void write_to_file(string file_name, string message, bool overwrite = true) {
+void write_to_file(std::string file_name, auto message, bool overwrite = true) {
 	if (overwrite)
 	{
-		ofstream output(file_name);
+		std::ofstream output(file_name);
 		output << message;
 		output.close();
 	}
 	else
 	{
-		ofstream output(file_name, std::ios::app);
+		std::ofstream output(file_name, std::ios::app);
 		output << message;
 		output.close();
 	}
 }
-
 
 
 // Forward declarations of functions included in this code module:
@@ -79,8 +83,8 @@ static void ShowContextMenu(HWND hWnd);
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
 
-LPWSTR format_last_error(const wstring& msg) {
-	wostringstream oss;
+LPWSTR format_last_error(const std::wstring& msg) {
+	std::wostringstream oss;
 	const DWORD dwErrorCode = GetLastError();
 	WCHAR pBuffer[MAX_PATH];
 	DWORD cchMsg = FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
@@ -91,39 +95,27 @@ LPWSTR format_last_error(const wstring& msg) {
 		MAX_PATH,
 	nullptr);
 
-	oss << msg << endl << L"(" << dwErrorCode << ")" << " " << pBuffer;
-	wstring s = oss.str();
+	oss << msg << std::endl << L"(" << dwErrorCode << ")" << " " << pBuffer;
+	std::wstring s = oss.str();
 	const rsize_t word_count = s.length() + 1;
 	wchar_t* p = new wchar_t[word_count];
 	wcscpy_s(p, word_count, s.c_str());
 	return p;
 }
 
-LPWSTR format_process_id(const wstring& msg, DWORD process_id) {
-	wostringstream oss;
-	oss << msg << " " << L"(" << GetLastError() << ")" << endl;
-	wstring s = oss.str();
+LPWSTR format_process_id(const std::wstring& msg, DWORD process_id) {
+	std::wostringstream oss;
+	oss << msg << " " << L"(" << GetLastError() << ")" << std::endl;
+	std::wstring s = oss.str();
 	const rsize_t word_count = s.length() + 1;
 	wchar_t* p = new wchar_t[word_count];
 	wcscpy_s(p, word_count, s.c_str());
 	return p;
 }
 
-
-VOID CALLBACK WaitOrTimerCallback(_In_ PVOID lpParameter, _In_ BOOLEAN TimerOrWaitFired)
-{
-	if (!TimerOrWaitFired)
-	{
-		[[maybe_unused]] const BOOL succeeded = PostMessage(kDlg, UWM_CHILDQUIT, NULL, NULL);
-		assert(succeeded);
-	}
-
-	return;
-}
 
 void InitializeNotificationData()
 {
-
 
 	ZeroMemory(&kData, sizeof(NOTIFYICONDATA));
 	kData.cbSize = sizeof(NOTIFYICONDATA);
@@ -139,7 +131,7 @@ void ShowNotificationData(bool on)
 	NOTIFYICONDATA nid;
 
 	ZeroMemory(&nid, sizeof(nid));
-	const path image_path = on ? CIniConfig::GetOnIconPath() : CIniConfig::GetOffIconPath();
+	const std::filesystem::path image_path = on ? CIniConfig::GetOnIconPath() : CIniConfig::GetOffIconPath();
 
 	UINT flags = LR_MONOCHROME;
 	flags |= LR_LOADFROMFILE;
@@ -158,162 +150,26 @@ void ShowNotificationData(bool on)
 	DestroyIcon(icon);
 }
 
-unique_ptr<wchar_t[]> BuildCmdLine()
-{
-	const path app_path = CIniConfig::GetAppPath();
-
-	const wstring app_args = CIniConfig::GetAppArgs();
-
-	wstringstream wss;
-	wss << app_path << " " << app_args;
-
-	wstring s = wss.str();
-
-	const size_t word_count = s.length() + 1;
-	unique_ptr<wchar_t[]> cmd_line = make_unique<wchar_t[]>(word_count);
-	s.copy(cmd_line.get(), word_count - 1);
-	s[word_count - 1] = L'\0';
-	return cmd_line;
-}
-
-void StartProcess()
-{
-	STARTUPINFO si;
-	PROCESS_INFORMATION pi;
-	LPWSTR msg;
-	ZeroMemory(&si, sizeof(si));
-	ZeroMemory(&pi, sizeof(pi));
-	BOOL rc;
-
-	HANDLE hJobObject = CreateJobObject(nullptr, nullptr);
-	assert(hJobObject != NULL);
-
-	JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli{};
-	memset(&jeli, 0, sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
-
-	jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-	rc = SetInformationJobObject(hJobObject, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
-	if (rc == 0)
-	{
-		// ReSharper disable once CppAssignedValueIsNeverUsed
-		rc = CloseHandle(hJobObject);
-		assert(rc);
-
-		msg = format_last_error(L"Create Job failed.");
-		// ReSharper disable once CppAssignedValueIsNeverUsed
-		rc = PostMessage(kDlg, UWM_UPDATEINFO, NULL, reinterpret_cast<LPARAM>(msg));
-		assert(rc);
-		return;
-	}
-
-	si.cb = sizeof(si);
-	if (CIniConfig::GetAppHide())
-	{
-		si.dwFlags = STARTF_USESHOWWINDOW;
-		si.wShowWindow = SW_HIDE;
-	}
-
-	const path startup_dir = CIniConfig::GetWorkDirPath();
-
-	unique_ptr<wchar_t[]>  cmd_line = BuildCmdLine();
-
-	unique_ptr<wchar_t[]> env_block = build_env_block();
-	rc = CreateProcess(
-		nullptr, // No module name (use command line)
-		cmd_line.get(), // Command line
-		nullptr, // Process handle not inheritable
-		nullptr, // Thread handle not inheritable
-		TRUE, // Set handle inheritance to FALSE
-		CREATE_UNICODE_ENVIRONMENT, // No creation flags
-		env_block.get(), // Use parent's environment block
-		startup_dir.c_str(), // Use parent's starting directory
-		&si, // Pointer to STARTUPINFO structure
-		&pi // Pointer to PROCESS_INFORMATION structure
-	);
-
-	if (!rc)
-	{
-		// ReSharper disable once CppAssignedValueIsNeverUsed
-		rc = CloseHandle(hJobObject);
-		assert(rc);
-
-		msg = format_last_error(L"CreateProcess failed");
-		// ReSharper disable once CppAssignedValueIsNeverUsed
-		rc = PostMessage(kDlg, UWM_UPDATEINFO, NULL, reinterpret_cast<LPARAM>(msg));
-		assert(rc);
-		return;
-	}
-
-	rc = AssignProcessToJobObject(hJobObject, pi.hProcess);
-	if (!rc)
-	{
-		msg = format_last_error(L"AssignProcessToJobObject failed.");
-		// ReSharper disable once CppAssignedValueIsNeverUsed
-		rc = CloseHandle(pi.hProcess);
-		assert(rc);
-		// ReSharper disable once CppAssignedValueIsNeverUsed
-		rc = CloseHandle(hJobObject);
-		assert(rc);
-		// ReSharper disable once CppAssignedValueIsNeverUsed
-		rc = PostMessage(kDlg, UWM_UPDATEINFO, NULL, reinterpret_cast<LPARAM>(msg));
-		assert(rc);
-		return;
-	}
-
-	// ReSharper disable once CppAssignedValueIsNeverUsed
-	rc = PostMessage(kDlg, UWM_CHILDCREATE, NULL, reinterpret_cast<LPARAM>(hJobObject));
-	assert(rc);
-
-	msg = format_process_id(L"Process Running", pi.dwProcessId);
-	// ReSharper disable once CppAssignedValueIsNeverUsed
-	rc = PostMessage(kDlg, UWM_UPDATEINFO, NULL, reinterpret_cast<LPARAM>(msg));
-	assert(rc);
-
-	// ReSharper disable once CppAssignedValueIsNeverUsed
-	rc = RegisterWaitForSingleObject(&hNewWaitHandle, pi.hProcess, WaitOrTimerCallback, hJobObject, INFINITE,
-		WT_EXECUTEONLYONCE);
-	assert(rc);
-
-
-}
-
-void StopProcess()
-{
-	if (hJob)
-	{
-		// ReSharper disable once CppEntityAssignedButNoRead
-		// ReSharper disable once CppJoinDeclarationAndAssignment
-		BOOL succeeded;
-
-		// ReSharper disable once CppAssignedValueIsNeverUsed
-		succeeded = TerminateJobObject(hJob, -1);
-		assert(succeeded);
-
-		// ReSharper disable once CppAssignedValueIsNeverUsed
-		succeeded = CloseHandle(hJob);
-		assert(succeeded);
-	}
-}
-
-
 
 
 class time_app {
 public:
-
-	clock_t timer1;
+	std::string exeFile;
+	clock_t timer_for_file;
+	clock_t timer_for_focused_apps;
 	time_t time_begin;
 	time_t time_now;
-	string time_to_line;
-	string date_temp;
-	string time_begin_line;
+	std::string time_to_line;
+	std::string date_temp;
+	std::string time_begin_line;
+	std::map<std::string, int> focused_apps_list;
 
 	time_app() {
 		temp_to_main();
-
 		time_begin = time(&time_begin);
 		time_now = time(&time_now);
-		timer1 = clock();
+		timer_for_file = clock();
+		timer_for_focused_apps = clock();
 		//temporary variables
 		char time_begin_chars[26];
 		struct tm buff;
@@ -323,22 +179,55 @@ public:
 		time_begin_line = time_begin_chars;
 		time_begin_line = time_begin_line.substr(0, sizeof(time_begin_line) - 16);
 
-		timer1 = clock() - FREQUENSY*2;
+		timer_for_file = clock() - TIME_FREQUENSY *2;
 		process();
 
 	}
 
 	~time_app() {
-		write_to_file(test_file_name, time_to_line);
+		temp_to_main();
+		if (!focused_apps_list.empty()) {
+			std::ofstream output(focus_file_name, std::ios::app);
+			output << "{\n";
+			for (auto i : focused_apps_list) {
+				output << i.first << " - " << i.second << '\n';
+			}
+			output << "}\n";
+			output.close();
+		}
 	}
 
+	void pause() {
+		temp_to_main();
+	}
+
+	void unpause() {
+
+		//repeat the constractor, +-
+		time_t temp_time_begin;
+		time_begin = time(&temp_time_begin);
+
+		time_t temp_time_now;
+		time_now = time(&temp_time_now);
+
+		char time_begin_chars[26];
+		struct tm buff;
+
+		localtime_s(&buff, &time_begin);
+		asctime_s(time_begin_chars, sizeof(time_begin_chars), &buff);
+		time_begin_line = time_begin_chars;
+		time_begin_line = time_begin_line.substr(0, sizeof(time_begin_line) - 16);
+
+		timer_for_file = clock() - TIME_FREQUENSY * 2;
+		process();
+	}
 
 	void temp_to_main() {
 
-		ifstream fin;
+		std::ifstream fin;
 		fin.open(temp_file_name);
 		if (fin.is_open()) {
-			fin.seekg(-1, ios_base::end);
+			fin.seekg(-1, std::ios_base::end);
 			while (1) {
 
 				char ch;
@@ -352,61 +241,96 @@ public:
 					break;
 				}
 				else {
-					fin.seekg(-2, ios_base::cur);
+					fin.seekg(-2, std::ios_base::cur);
 				}
 			}
-			string lastLine;
+			std::string lastLine;
 			getline(fin, lastLine);
 			fin.close();
 			write_to_file(main_file_name, lastLine + '\n', 0);
+			
+			const char* filename = temp_file_name.c_str();
+			//std::remove(filename);
 		}
 		else {
-			write_to_file(log_file_name, time_begin_line + ": fail to open\n", 0);
+			write_to_file(log_file_name, time_now, 0);
+			write_to_file(log_file_name, ": fail to open\n", 0);
 		}
 	}
 
+	std::string GetFocusedWindowExecutable() {
+		HWND hwnd = GetForegroundWindow();
+		if (!hwnd) return "";
+
+		static DWORD pid = 0;
+		GetWindowThreadProcessId(hwnd, &pid);
+		if (pid == 0) return "";
+
+		HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+		if (!hProcess) return "";
+
+		static char exePath[MAX_PATH] = { 0 };
+		DWORD len = GetModuleFileNameExA(hProcess, NULL, exePath, MAX_PATH);
+		CloseHandle(hProcess);
+
+		if (len == 0) return "";
+		return std::string(exePath, len);
+	}
 
 
 	void process() {
-		if (clock() - timer1 >= FREQUENSY) {
-			timer1 = clock();
+		m.lock();
+		if (clock() - timer_for_file >= TIME_FREQUENSY) {
+			timer_for_file = clock();
 			time_now = time(&time_now);
 			//temporary variables
-			static char time_chars[26];
-			static struct tm buff;
+			char time_chars[26]; //was static
+			struct tm buff;		 //was static
 			localtime_s(&buff, &time_now);
 			asctime_s(time_chars, sizeof(time_chars), &buff);
 			time_to_line = time_chars;
 			time_to_line = time_to_line.substr(0, sizeof(time_to_line) - 16);
-			date_temp = to_string((int)difftime(time_now, time_begin)) + ';' + time_to_line + ';' + time_begin_line;
+			date_temp = std::to_string((int)difftime(time_now, time_begin)) + ';' + time_to_line + ';' + time_begin_line;
 			write_to_file(temp_file_name, date_temp);
 		}
+		if (clock() - timer_for_focused_apps >= FOCUSED_FREQUENSY) {
+			timer_for_focused_apps = clock();
+			std::string exeFile;
+			exeFile = GetFocusedWindowExecutable();
+			int index = exeFile.find_last_of('\\');
+			if (index != -1) exeFile = exeFile.substr(index + 1, exeFile.length());
+			if (focused_apps_list.count(exeFile)) {
+				focused_apps_list[exeFile]++;
+			}
+			else {
+				focused_apps_list[exeFile] = 1;
+			}
+			
+		}
+		m.unlock();
 	}
 
-};
+}; //end of class
 
 
 
-void collect_data(time_app app, std::stop_token stop_token) {
+void collect_data(time_app* app_ptr, std::stop_token stop_token) {
 	while (!stop_token.stop_requested()) {
-		app.process();
-
+		app_ptr->process();
 	}
 }
 
 
 
+time_app StatApp;
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow)
 {
-	
-	time_app app;
+
 
 	MSG msg;
 	register_class(hInstance, WndProc);
 	config.Initialize();
 
-
-	// Perform application initialization:
 	if (!InitInstance(hInstance, nCmdShow))
 	{
 		return FALSE;
@@ -415,11 +339,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
 
 
-	// Main message loop:
-
+	time_app* StatAppPtr = &StatApp;
 
 	std::stop_token stop_token = stopSource.get_token();
-	std::thread my_app(collect_data, app, stop_token);
+	std::thread my_app(collect_data, StatAppPtr, stop_token);
+
+	//show icon in system tray
+	ShowNotificationData(true);
 
 	while ((fGotMessage = GetMessage(&msg, (HWND)nullptr, 0, 0)) != 0 && fGotMessage != -1)
 	{
@@ -432,6 +358,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
 	stopSource.request_stop();
 	my_app.join();
+
 
 	return static_cast<int>(msg.wParam);
 
@@ -454,7 +381,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
 	InitializeNotificationData();
 
-	const path image_path = CIniConfig::GetOffIconPath();
+	const std::filesystem::path image_path = CIniConfig::GetOffIconPath();
 
 	constexpr UINT flags = LR_LOADFROMFILE;
 	const auto icon = static_cast<HICON>(LoadImage(
@@ -468,7 +395,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 	Shell_NotifyIcon(NIM_ADD, &kData);
 	DestroyIcon(icon);
 	kData.hIcon = nullptr;
-	//how to open new window keyword
+	//how to open new window 
 	//StartProcess();
 
 	return TRUE;
@@ -477,7 +404,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
 BOOL OnInitDialog(HWND hWnd)
 {
-	const path image_path = CIniConfig::GetOffIconPath();
+	const std::filesystem::path image_path = CIniConfig::GetOffIconPath();
 
 	if (const HMENU h_menu = GetSystemMenu(hWnd, FALSE))
 	{
@@ -498,7 +425,7 @@ BOOL OnInitDialog(HWND hWnd)
 	return TRUE;
 }
 
-// Name says it all
+
 void ShowContextMenu(HWND hWnd)
 {
 	POINT pt;
@@ -518,8 +445,7 @@ void ShowContextMenu(HWND hWnd)
 		}
 
 		InsertMenu(h_menu, -1, MF_BYPOSITION, SWM_EXIT, _T("Exit"));
-		// note:    must set window to the foreground or the
-		//          menu won't disappear when it should
+
 		SetForegroundWindow(hWnd);
 		TrackPopupMenu(
 			h_menu,
@@ -544,18 +470,20 @@ void UpdateInfoTextByConst(LPCWSTR s)
 {
 	SetWindowText(wMsg, s);
 }
-
+ 
+bool flag = true;
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	int wm_id;
+	
+	if (IsWindowVisible(hWnd) && flag) {
+		ShowWindow(hWnd, SW_HIDE);
+		flag = false;
+	}
 
-	//if (hJob)
-	//{
-	//	//ShowWindow(hWnd, SW_HIDE);
-	//	CloseHandle(hJob);
-	//	hJob = nullptr;
-	//}
+
+
 	switch (message)
 	{
 	case SWM_TRAYMSG:
@@ -579,28 +507,20 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		UpdateInfoText(reinterpret_cast<LPCWSTR>(lParam));
 		break;
 
-	case UWM_CHILDQUIT:
-		if (hJob)
-		{
-			CloseHandle(hJob);
-			hJob = nullptr;
-		}
-		ShowNotificationData(false);
 
-		UpdateInfoTextByConst(L"Process Exit.");
-		break;
-	case UWM_CHILDCREATE:
-		hJob = reinterpret_cast<HANDLE>(lParam);  // NOLINT(performance-no-int-to-ptr)
-		ShowNotificationData(true);
-		break;
+
 	case WM_SYSCOMMAND:
-		if ((wParam & 0xFFF0) == SC_MINIMIZE)
+		switch (wParam)
 		{
-			ShowWindow(hWnd, SW_HIDE);
+		case SC_MINIMIZE:
 			return 1;
+		
+		case SC_MAXIMIZE:
+			return 1;
+			
+		default:
+			break;
 		}
-
-		break;
 
 	case WM_COMMAND:
 		wm_id = LOWORD(wParam);
@@ -608,28 +528,31 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		switch (wm_id)
 		{
 		case SWM_SHOW:
-
+			m.lock();
+			StatApp.pause();
 			ShowNotificationData(true);
 			ShowWindow(hWnd, SW_RESTORE);
+
 			break;
 
 		case SWM_HIDE:
+			m.unlock();
+			StatApp.unpause();
 			ShowWindow(hWnd, SW_HIDE);
 			break;
 
-		case IDC_START:
-			if (!hJob)
-			{
-				StartProcess();
-			}
-			break;
 
 		case IDC_STOP:
-			StopProcess();
-			hJob = nullptr;
+			// if L"stop"
+			m.unlock();
+			StatApp.unpause();
+			ShowWindow(hWnd, SW_HIDE);
 			break;
 
 		case SWM_EXIT:
+			ShowNotificationData(false);
+			kData.uFlags = 0;
+			Shell_NotifyIcon(NIM_DELETE, &kData);
 			DestroyWindow(hWnd);
 			break;
 
@@ -640,37 +563,25 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		return 1;
 
 	case WM_CREATE:
-		wMsg = CreateWindow(
-			L"STATIC",
-			L"Ready to Start",
-			WS_VISIBLE | WS_CHILD,
-			50, 20, 300, 60,
-			hWnd, NULL, 0, NULL);
-		CreateWindow(
-			L"BUTTON", L"start", WS_VISIBLE | WS_CHILD,
-			80, 120, 100, 20, hWnd, (HMENU)IDC_START, 0, NULL);
 		CreateWindow(
 			L"BUTTON", L"stop", WS_VISIBLE | WS_CHILD,
-			200, 120, 100, 20, hWnd, (HMENU)IDC_STOP, 0, NULL);
+			0, 0, 400, 200, hWnd, (HMENU)IDC_STOP, 0, NULL);
 		OnInitDialog(hWnd);
 		break;
 
 	case WM_CLOSE:
-		ShowWindow(hWnd, SW_HIDE);
-		break;
+		return 0;
+
 
 	case WM_DESTROY:
 		ShowNotificationData(false);
 		kData.uFlags = 0;
 		Shell_NotifyIcon(NIM_DELETE, &kData);
-		StopProcess();
-		hJob = nullptr;
 		PostQuitMessage(0);
 		break;
 
 	default:
 		break;
 	}
-
 	return DefWindowProc(hWnd, message, wParam, lParam);
 }
