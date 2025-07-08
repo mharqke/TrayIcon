@@ -49,10 +49,20 @@ NOTIFYICONDATA kData;
 
 HWND kDlg;
 
+#define DEBUG 0
+
+#if DEBUG
+const std::string temp_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/test/temp.txt";
+const std::string main_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/test/main.txt";
+const std::string log_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/test/log.txt";
+const std::string focus_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/test/focus.txt";
+#else
 const std::string temp_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/temp.txt";
 const std::string main_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/main.txt";
 const std::string log_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/log.txt";
 const std::string focus_file_name = "D:/3VERGIVEN/common folder/statistic/cpp_app_data/focus.txt";
+#endif
+
 const int TIME_FREQUENSY = 1000; // in milliseconds
 const int FOCUSED_FREQUENSY = 500; //in milliseconds
 
@@ -165,6 +175,7 @@ public:
 	std::map<std::string, int> focused_apps_list;
 
 	time_app() {
+		write_to_file(log_file_name, "constructed\n", 0);
 		temp_to_main();
 		time_begin = time(&time_begin);
 		time_now = time(&time_now);
@@ -185,14 +196,16 @@ public:
 	}
 
 	~time_app() {
+		write_to_file(log_file_name, "deconstructed", 0);
+		write_to_file(log_file_name, time_to_line + '\n', 0);
 		temp_to_main();
 		if (!focused_apps_list.empty()) {
 			std::ofstream output(focus_file_name, std::ios::app);
-			output << "{\n";
+			output << "{" + time_begin_line + "\n";
 			for (auto i : focused_apps_list) {
 				output << i.first << " - " << i.second << '\n';
 			}
-			output << "}\n";
+			output << "}" + time_to_line + "\n";
 			output.close();
 		}
 	}
@@ -250,7 +263,7 @@ public:
 			write_to_file(main_file_name, lastLine + '\n', 0);
 			
 			const char* filename = temp_file_name.c_str();
-			//std::remove(filename);
+			std::remove(filename);
 		}
 		else {
 			write_to_file(log_file_name, time_now, 0);
@@ -434,7 +447,9 @@ void ShowContextMenu(HWND hWnd)
 	if (HMENU h_menu = CreatePopupMenu())
 	{
 		//InsertMenu(h_menu, -1, MF_BYPOSITION, write_to_file, _T("write"));
-		//AppendMenu(h_menu, MF_STRING, 0, L"&Disable History");
+#if DEBUG
+		AppendMenu(h_menu, MF_STRING, 0, L"debug");
+#endif
 		if (IsWindowVisible(hWnd))
 		{
 			InsertMenu(h_menu, -1, MF_BYPOSITION, SWM_HIDE, _T("Hide"));
